@@ -1764,39 +1764,51 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 </div><!-- /mainSite -->
 
 <script>
-  // ── SUPABASE CONFIG (main site) ──
+  // ── SUPABASE CONFIG ──
   const SB_URL = 'https://opmjehceohcobnribzcb.supabase.co';
   const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wbWplaGNlb2hjb2JucmliemNiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzMjQ5NzAsImV4cCI6MjA5MDkwMDk3MH0.ep8faE46F99VkrJ3pFd92lg0j9J0xeBSj0kCupOMLmo';
 
   async function sbFetch(table, method='GET', body=null, query='') {
-    const opts = {
-      method,
-      headers: {
-        'apikey': SB_KEY,
-        'Authorization': 'Bearer ' + SB_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': method === 'POST' ? 'return=representation' : ''
+    try {
+      const opts = {
+        method,
+        headers: {
+          'apikey': SB_KEY,
+          'Authorization': 'Bearer ' + SB_KEY,
+          'Content-Type': 'application/json',
+          'Prefer': method === 'POST' ? 'return=representation' : ''
+        }
+      };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(SB_URL + '/rest/v1/' + table + query, opts);
+      if (!res.ok) {
+        const err = await res.text();
+        console.error('sbFetch error:', table, res.status, err);
+        return null;
       }
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(SB_URL + '/rest/v1/' + table + query, opts);
-    if (!res.ok) return null;
-    if (method === 'DELETE' || res.status === 204) return true;
-    return res.json();
+      if (method === 'DELETE' || res.status === 204) return true;
+      return res.json();
+    } catch(e) {
+      console.error('sbFetch network error:', e);
+      return null;
+    }
   }
 
-  // Stock levels loaded from Supabase
+  // Live stock from Supabase
   let liveStock = {};
 
   async function loadLiveStock() {
     try {
-      const prods = await sbFetch('products', 'GET', null, '?select=name,stock_quantity,is_active&order=display_order.asc');
-      if (prods) {
+      const prods = await sbFetch('products', 'GET', null, '?select=name,stock_quantity&is_active=eq.true');
+      if (prods && prods.length > 0) {
         prods.forEach(p => { liveStock[p.name] = p.stock_quantity; });
-        renderHomeProducts();
-        renderShopGrid();
+        console.log('Stock loaded from Supabase:', liveStock);
       }
-    } catch(e) { console.log('Stock load failed, using defaults'); }
+    } catch(e) {
+      console.log('Stock load failed, using defaults');
+    }
+    renderHomeProducts();
+    renderShopGrid();
   }
 
   const products = [
@@ -2176,43 +2188,57 @@ const vialImages = {
     const cartSnapshot = [...cart];
     cart=[];updateCart();renderHomeProducts();renderShopGrid();
 
-    // Save order to Supabase + deduct stock
+    // Save order to Supabase
     try {
       const orderData = {
         order_ref: ref,
         customer_name: fname + ' ' + lname,
         customer_email: customerEmail,
         customer_phone: phone || null,
-        shipping_address: JSON.stringify({ line1:addr1, line2:addr2||null, city, postcode, country }),
-        items: JSON.stringify(cartSnapshot.map(i=>({id:i.id, name:i.name, dose:i.dose, qty:i.qty, price:i.price}))),
-        subtotal: subtotal,
+        shipping_address: { line1:addr1, line2:addr2||null, city, postcode, country },
+        items: cartSnapshot.map(i=>({id:i.id, name:i.name, dose:i.dose, qty:i.qty, price:i.price})),
+        subtotal: parseFloat(subtotal.toFixed(2)),
         discount_code: window._discountCode || null,
-        discount_amount: discountAmt || null,
-        shipping_cost: shipping,
-        total: grandTotal,
+        discount_amount: discountAmt > 0 ? parseFloat(discountAmt.toFixed(2)) : null,
+        shipping_cost: parseFloat(shipping.toFixed(2)),
+        total: parseFloat(grandTotal.toFixed(2)),
         payment_method: method,
         payment_status: 'pending',
         order_status: 'pending',
         local_pickup: window._localPickup || false,
       };
-      await sbFetch('orders', 'POST', orderData);
+      const saved = await sbFetch('orders', 'POST', orderData);
+      if (saved) {
+        console.log('Order saved to Supabase ✅', ref);
+      } else {
+        console.warn('Order save returned null - check Supabase table columns');
+      }
 
-      // Deduct stock for each item
+      // Deduct stock in Supabase for each item
       for (const item of cartSnapshot) {
-        const current = liveStock[item.name];
-        if (current !== undefined) {
-          const stockRow = await sbFetch('products', 'GET', null, '?select=id,stock_quantity&name=eq.' + encodeURIComponent(item.name));
-          if (stockRow && stockRow.length > 0) {
-            const newQty = Math.max(0, (stockRow[0].stock_quantity || 0) - item.qty);
-            await sbFetch('products', 'PATCH', { stock_quantity: newQty }, '?id=eq.' + stockRow[0].id);
-            liveStock[item.name] = newQty;
-          }
+        const prodRows = await sbFetch('products', 'GET', null,
+          '?select=id,stock_quantity&name=eq.' + encodeURIComponent(item.name));
+        if (prodRows && prodRows.length > 0) {
+          const prod = prodRows[0];
+          const newQty = Math.max(0, (prod.stock_quantity || 0) - item.qty);
+          await sbFetch('products', 'PATCH',
+            { stock_quantity: newQty },
+            '?id=eq.' + prod.id);
+          liveStock[item.name] = newQty;
+          // Log stock movement
+          await sbFetch('stock_movements', 'POST', {
+            product_id: prod.id,
+            movement_type: 'remove',
+            quantity: item.qty,
+            reference: ref,
+            notes: 'Order ' + ref
+          });
         }
       }
-      await loadLiveStock();
-      console.log('Order saved to Supabase ✅');
+      renderHomeProducts();
+      renderShopGrid();
     } catch(e) {
-      console.error('Supabase save failed (order still placed):', e);
+      console.error('Supabase order save failed:', e);
     }
 
     // Send confirmation email
@@ -2780,36 +2806,46 @@ function toggleSidebar() { document.getElementById('sidebar').classList.toggle('
 
 // ── DASHBOARD ──
 async function initDashboard() {
-  document.getElementById('dashDate').textContent = new Date().toLocaleDateString('en-GB', {weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const dateEl = document.getElementById('dashDate');
+  if(dateEl) dateEl.textContent = new Date().toLocaleDateString('en-GB', {weekday:'long',year:'numeric',month:'long',day:'numeric'});
   try {
-    const orders = await sb('orders','GET',null,'?select=*&order=created_at.desc');
-    const products = await sb('products','GET',null,'?select=*');
-    const revenue = orders.filter(o=>o.payment_status==='confirmed').reduce((s,o)=>s+(o.total||0),0);
-    const pending = orders.filter(o=>o.order_status==='pending').length;
-    const lowStock = products.filter(p=>p.stock_quantity<=p.low_stock_threshold).length;
-    document.getElementById('statRevenue').textContent = `£${revenue.toFixed(2)}`;
-    document.getElementById('statOrders').textContent = orders.length;
+    const [orders, products] = await Promise.all([
+      sb('orders','GET',null,'?select=*&order=created_at.desc'),
+      sb('products','GET',null,'?select=*')
+    ]);
+    const safeOrders = orders || [];
+    const safeProducts = products || [];
+    const revenue = safeOrders.filter(o=>o.payment_status==='confirmed').reduce((s,o)=>s+(o.total||0),0);
+    const pending = safeOrders.filter(o=>o.order_status==='pending').length;
+    const lowStock = safeProducts.filter(p=>p.stock_quantity<=p.low_stock_threshold).length;
+
+    document.getElementById('statRevenue').textContent = '£' + revenue.toFixed(2);
+    document.getElementById('statOrders').textContent = safeOrders.length;
     document.getElementById('statPending').textContent = pending;
     document.getElementById('statLowStock').textContent = lowStock;
-    document.getElementById('pendingBadge').textContent = pending;
-    document.getElementById('pendingBadge').style.display = pending > 0 ? 'inline' : 'none';
-    // Recent orders
+    const badge = document.getElementById('pendingBadge');
+    if(badge){ badge.textContent=pending; badge.style.display=pending>0?'inline':'none'; }
+
     const rot = document.getElementById('recentOrdersTable');
-    rot.innerHTML = orders.slice(0,5).map(o=>`<tr>
-      <td><strong style="color:var(--teal)">${o.order_ref}</strong></td>
-      <td>${o.customer_name||'—'}</td>
-      <td>£${(o.total||0).toFixed(2)}</td>
-      <td>${statusBadge(o.order_status)}</td>
-    </tr>`).join('') || '<tr><td colspan="4" class="empty-state">No orders yet</td></tr>';
-    // Low stock
+    if(rot) rot.innerHTML = safeOrders.length > 0
+      ? safeOrders.slice(0,5).map(o=>`<tr>
+          <td><strong style="color:var(--teal)">${o.order_ref}</strong></td>
+          <td>${o.customer_name||'—'}</td>
+          <td>£${(o.total||0).toFixed(2)}</td>
+          <td>${statusBadge(o.order_status)}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" class="empty-state"><span class="empty-state-icon">📭</span>No orders yet</td></tr>';
+
     const lst = document.getElementById('stockAlertsTable');
-    const low = products.filter(p=>p.stock_quantity<=p.low_stock_threshold);
-    lst.innerHTML = low.map(p=>`<tr>
-      <td>${p.name}</td>
-      <td><strong style="color:${p.stock_quantity===0?'var(--red)':'var(--orange)'}">${p.stock_quantity}</strong></td>
-      <td>${p.stock_quantity===0?'<span class="badge badge-red">Out of Stock</span>':'<span class="badge badge-orange">Low Stock</span>'}</td>
-    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--muted)">✅ All stock healthy</td></tr>';
-  } catch(e) { showToast('Could not load dashboard data','error'); }
+    const low = safeProducts.filter(p=>p.stock_quantity<=p.low_stock_threshold);
+    if(lst) lst.innerHTML = low.length > 0
+      ? low.map(p=>`<tr>
+          <td>${p.name}</td>
+          <td><strong style="color:${p.stock_quantity===0?'var(--red)':'var(--orange)'}">${p.stock_quantity}</strong></td>
+          <td>${p.stock_quantity===0?'<span class="badge badge-red">Out of Stock</span>':'<span class="badge badge-orange">Low Stock</span>'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--muted)">✅ All stock healthy</td></tr>';
+  } catch(e) { console.error('Dashboard error:', e); showToast('Could not load dashboard','error'); }
 }
 
 // ── PRODUCTS ──
@@ -2982,9 +3018,15 @@ let allOrders = [];
 async function loadOrders() {
   try {
     const filter = document.getElementById('orderFilter')?.value||'all';
-    const query = filter==='all' ? '?select=*&order=created_at.desc' : `?select=*&order_status=eq.${filter}&order=created_at.desc`;
-    allOrders = await sb('orders','GET',null,query);
+    const query = filter==='all'
+      ? '?select=*&order=created_at.desc'
+      : '?select=*&order_status=eq.' + filter + '&order=created_at.desc';
+    const orders = await sb('orders','GET',null,query);
+    allOrders = orders || [];
     renderOrders(allOrders);
+    const pending = allOrders.filter(o=>o.order_status==='pending').length;
+    const badge = document.getElementById('pendingBadge');
+    if(badge){ badge.textContent=pending; badge.style.display=pending>0?'inline':'none'; }
   } catch(e) { showToast('Error loading orders','error'); }
 }
 
@@ -3018,7 +3060,7 @@ async function updateOrderStatus(id, status) {
   if (!status) return;
   try {
     await sb('orders','PATCH',{order_status:status},`?id=eq.${id}`);
-    showToast(`Order status updated to ${status}`);
+    showToast('Order status updated to ' + status);
     loadOrders(); initDashboard();
   } catch(e) { showToast('Error updating order','error'); }
 }
@@ -3043,7 +3085,7 @@ async function viewOrder(id) {
     </div>
     <div style="background:var(--navy-3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;">
       <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Order Items</div>
-      ${(o.items||[]).map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.82rem;"><span>${i.name} ${i.dose} × ${i.qty}</span><span>£${(i.price*i.qty).toFixed(2)}</span></div>`).join('')}
+      ${(typeof o.items === 'string' ? JSON.parse(o.items) : (o.items||[])).map(i=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.82rem;"><span>${i.name} ${i.dose} × ${i.qty}</span><span>£${(i.price*i.qty).toFixed(2)}</span></div>`).join('')}
       <div style="display:flex;justify-content:space-between;padding:10px 0 4px;font-size:0.82rem;color:var(--muted);"><span>Shipping</span><span>Free</span></div>
       ${o.discount_code?`<div style="display:flex;justify-content:space-between;font-size:0.82rem;color:var(--teal);padding-bottom:6px;"><span>Discount (${o.discount_code})</span><span>-£${(o.discount_amount||0).toFixed(2)}</span></div>`:''}
       <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border);font-size:0.9rem;font-weight:700;"><span style="color:var(--white)">Total</span><span style="color:var(--teal)">£${(o.total||0).toFixed(2)}</span></div>
@@ -3071,38 +3113,38 @@ async function viewOrder(id) {
 // ── STOCK ──
 async function loadStock() {
   try {
-    if (!allProducts.length) allProducts = await sb('products','GET',null,'?select=*&order=display_order.asc');
-    const movements = await sb('stock_movements','GET',null,'?select=*,products(name)&order=created_at.desc&limit=20');
+    if (!allProducts.length) allProducts = await sb('products','GET',null,'?select=*&order=display_order.asc') || [];
+    const movements = await sb('stock_movements','GET',null,'?select=*,products(name)&order=created_at.desc&limit=20') || [];
     // Stock table
     const t = document.getElementById('stockTable');
-    t.innerHTML = allProducts.map(p=>`<tr>
-      <td><strong style="color:var(--white)">${p.name}</strong></td>
+    t.innerHTML = allProducts.length > 0 ? allProducts.map(p=>`<tr>
+      <td><strong style="color:var(--white)">${p.name}</strong><br><span style="font-size:0.72rem;color:var(--muted)">${p.dose||''}</span></td>
       <td><span class="badge badge-teal">${p.category}</span></td>
       <td>${stockBar(p.stock_quantity,p.low_stock_threshold)}</td>
       <td><span style="color:var(--muted)">${p.low_stock_threshold} units</span></td>
       <td>${p.stock_quantity===0?'<span class="badge badge-red">Out of Stock</span>':p.stock_quantity<=p.low_stock_threshold?'<span class="badge badge-orange">Low Stock</span>':'<span class="badge badge-green">In Stock</span>'}</td>
       <td><button class="btn btn-outline btn-sm" onclick="quickStockAdjust('${p.id}','${p.name}')">Adjust</button></td>
-    </tr>`).join('');
+    </tr>`).join('') : '<tr><td colspan="6" class="empty-state"><span class="empty-state-icon">📦</span>No products found</td></tr>';
     // Low stock alerts
     const low = allProducts.filter(p=>p.stock_quantity<=p.low_stock_threshold);
     const alerts = document.getElementById('lowStockAlerts');
-    alerts.innerHTML = low.map(p=>`
+    if(alerts) alerts.innerHTML = low.length > 0 ? low.map(p=>`
       <div class="alert-banner" style="${p.stock_quantity===0?'':'border-color:rgba(243,156,18,0.3);background:rgba(243,156,18,0.06)'}">
         <div class="alert-banner-icon">${p.stock_quantity===0?'🚨':'⚠️'}</div>
         <p><strong style="color:${p.stock_quantity===0?'var(--red)':'var(--orange)'}">${p.name}</strong> — ${p.stock_quantity===0?'Out of stock':'Low stock'}: ${p.stock_quantity} units remaining (threshold: ${p.low_stock_threshold})</p>
-      </div>`).join('');
+      </div>`).join('') : '';
     // History
     const ht = document.getElementById('stockHistoryTable');
-    ht.innerHTML = movements.map(m=>`<tr>
+    ht.innerHTML = movements.length > 0 ? movements.map(m=>`<tr>
       <td>${m.products?.name||'—'}</td>
       <td><span class="badge ${m.movement_type==='add'?'badge-green':m.movement_type==='remove'||m.movement_type==='damaged'?'badge-red':'badge-orange'}">${m.movement_type}</span></td>
       <td><strong style="color:${m.movement_type==='add'?'var(--green)':'var(--red)'}">${m.movement_type==='add'?'+':'−'}${m.quantity}</strong></td>
       <td style="font-size:0.75rem;color:var(--muted)">${m.reference||'—'}</td>
       <td style="font-size:0.75rem;color:var(--muted)">${formatDate(m.created_at)}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="empty-state">No movements yet</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="5" class="empty-state">No movements yet</td></tr>';
     // Populate dropdown
     const sel = document.getElementById('sProduct');
-    sel.innerHTML = '<option value="">Select product...</option>' + allProducts.map(p=>`<option value="${p.id}">${p.name} (${p.stock_quantity} in stock)</option>`).join('');
+    if(sel) sel.innerHTML = '<option value="">Select product...</option>' + allProducts.map(p=>`<option value="${p.id}">${p.name} (${p.stock_quantity} in stock)</option>`).join('');
   } catch(e) { showToast('Error loading stock','error'); }
 }
 
@@ -3125,7 +3167,6 @@ async function saveStockMovement() {
       reference:document.getElementById('sRef').value.trim()||null,
       notes:document.getElementById('sNotes').value.trim()||null
     });
-    // Update product stock
     const p = allProducts.find(x=>x.id===pid);
     if (p) {
       const newQty = type==='add' ? p.stock_quantity+qty : Math.max(0,p.stock_quantity-qty);
@@ -3231,7 +3272,7 @@ function stockBar(qty,threshold) {
   return `<div class="stock-bar-wrap"><div class="stock-bar"><div class="stock-bar-fill" style="width:${pct}%;background:${col}"></div></div><span class="stock-num" style="color:${col}">${qty}</span></div>`;
 }
 function formatDate(d) { if(!d)return'—'; return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
-function formatItems(items) { if(!items||!items.length)return'—'; return items.map(i=>`${i.name} ×${i.qty}`).join(', '); }
+function formatItems(items) { const arr = Array.isArray(items) ? items : (typeof items==='string' ? JSON.parse(items||'[]') : []); if(!arr.length)return'—'; return arr.map(i=>`${i.name} ×${i.qty}`).join(', '); }
 function filterTable(tableId,val) {
   const rows=document.getElementById(tableId).querySelectorAll('tr');
   rows.forEach(r=>{ r.style.display=r.textContent.toLowerCase().includes(val.toLowerCase())?'':'none'; });
