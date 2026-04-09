@@ -8,11 +8,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-WDCXGSKP');</script>
 <!-- End Google Tag Manager -->
-<!-- EmailJS -->
-<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
-<script type="text/javascript">
-  (function(){ emailjs.init({ publicKey: '6hVOj1u0v_K_GbjJZ' }); })();
-</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Pepilix | Premium Research Peptides UK</title>
@@ -1767,7 +1763,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <div class="toast" id="toast"></div>
 </div><!-- /mainSite -->
 
-<script type="application/javascript">
+<script>
   const products = [
     {id:1,category:'peptide',tag:'Research Peptide',icon:'🧬',name:'GLOW',dose:'70mg',desc:'Lyophilised research-grade GLOW peptide in a sterilised laboratory vial. Precision-filled to ±0.0001mg tolerance with full COA documentation.',price:60,purity:'≥99% Purity'},
     {id:2,category:'peptide',tag:'Research Peptide',icon:'🔬',name:'MOTS-C',dose:'10mg',desc:'Mitochondria-derived peptide for advanced metabolic research. Cleanroom synthesised with HPLC-verified purity and batch traceability.',price:30,purity:'≥99% Purity'},
@@ -3172,5 +3168,17 @@ document.addEventListener('DOMContentLoaded',()=>{
 document.addEventListener('DOMContentLoaded', checkAdminRoute);
 </script>
 
+<!-- EmailJS SDK — loaded last so it's available when placeOrder fires -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    if (typeof emailjs !== 'undefined') {
+      emailjs.init({ publicKey: '6hVOj1u0v_K_GbjJZ' });
+      console.log('EmailJS initialised ✅');
+    } else {
+      console.error('EmailJS failed to load ❌');
+    }
+  });
+</script>
 </body>
 </html>
