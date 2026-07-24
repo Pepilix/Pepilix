@@ -99,6 +99,12 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:18px 4
 .badge{display:inline-block;font-size:0.72rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--teal);background:var(--teal-dim);border:1px solid rgba(0,196,161,0.25);border-radius:20px;padding:5px 14px;margin-bottom:14px;}
 .product-title h1{font-size:clamp(2rem,3.4vw,2.8rem);font-style:italic;line-height:1.1;margin-bottom:6px;}
 .product-dose{color:var(--muted);font-size:0.95rem;margin-bottom:18px;}
+.size-selector{margin-bottom:20px;}
+.size-selector-label{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px;}
+.size-options{display:flex;gap:8px;flex-wrap:wrap;}
+.size-option{padding:8px 18px;border-radius:8px;border:1px solid var(--border);background:var(--navy-2);color:var(--text);font-size:0.85rem;font-weight:600;transition:all 0.2s;}
+.size-option:hover{border-color:var(--teal);color:var(--teal);}
+.size-option.active{background:var(--teal);color:var(--navy);border-color:var(--teal);}
 .product-price{font-size:1.8rem;color:var(--white);font-weight:700;margin-bottom:4px;}
 .product-stock{font-size:0.85rem;margin-bottom:22px;}
 .in-stock{color:var(--teal);} .out-stock{color:#e05555;}
@@ -158,6 +164,13 @@ footer a{color:var(--teal);}
       <div class="badge">Research Peptide</div>
       <h1>Retatrutide 20mg</h1>
       <div class="product-dose">Lyophilised Powder &middot; ≥99% HPLC-Verified Purity</div>
+      <div class="size-selector">
+        <div class="size-selector-label">Size</div>
+        <div class="size-options">
+          <a href="https://pepilix.com/products/retatrutide-10mg/" class="size-option">10mg</a>
+          <a href="https://pepilix.com/products/retatrutide-20mg/" class="size-option active">20mg</a>
+        </div>
+      </div>
       <div class="product-price" id="liveProductPrice">£75.00</div>
       <div class="product-stock in-stock" id="liveProductStock">In Stock</div>
 
